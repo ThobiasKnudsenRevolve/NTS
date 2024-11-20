@@ -1,5 +1,5 @@
 # Analyze 
-## As of 20 nov. 2024 the functionalities is:
+## As of 20 nov. 2024 the functionalities are:
  - Parsing PCAP files and storing the data in DataManager class
  - Visualizing the data stored in DataManager
  - Writing data stored in DataManager to InfluxDB
