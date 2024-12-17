@@ -33,7 +33,7 @@ public:
     // Stop the server
     void            stop();
     // Broadcast arbitrary data to all clients
-    void            broadcastData(const std::string& data);
+    void            broadcastData(const std::string& data, size_t batch_size);
     // Enqueue incoming data from clients (thread-safe)
     void            enqueueIncomingData(const std::string& data);
     // Dequeue incoming data (thread-safe), returns empty string if none available

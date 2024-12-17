@@ -122,16 +122,31 @@ void WebSocketServer::stop() {
     std::cout << "WebSocket server stopped.\n";
 }
 
-void WebSocketServer::broadcastData(const std::string& data) {
+void WebSocketServer::broadcastData(const std::string& data, size_t batch_size) {
     std::lock_guard<std::mutex> lock(m_clients_mutex);
-    for (auto it = m_clients.begin(); it != m_clients.end();) {
-        try {
-            (*it)->write(asio::buffer(data));
-            ++it;
-        } catch (const std::exception& e) {
-            std::cerr << "Client disconnected during broadcast: " << e.what() << "\n";
-            it = m_clients.erase(it);
+    auto it = m_clients.begin();
+    
+    while (it != m_clients.end()) {
+        size_t count = 0;
+        auto end_of_batch = it;
+        
+        // Send to batch_size clients or until the end of the list
+        while (end_of_batch != m_clients.end() && count < batch_size) {
+            try {
+                (*end_of_batch)->write(asio::buffer(data));
+                ++count;
+                ++end_of_batch;
+            } catch (const std::exception& e) {
+                std::cerr << "Client disconnected during batch broadcast: " << e.what() << "\n";
+                end_of_batch = m_clients.erase(end_of_batch); // Remove the disconnected client
+            }
         }
+
+        // Move the main iterator to where we left off
+        it = end_of_batch;
+
+        // Optionally sleep or yield here to prevent blocking
+        // std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 }
 

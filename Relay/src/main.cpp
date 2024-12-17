@@ -2,6 +2,7 @@
 #include "websocket_server.hpp"
 #include "pcap_reader.hpp"
 #include <iostream>
+#include <time.h>
 #include <nlohmann/json.hpp>
 using json = nlohmann::json;
 
@@ -10,11 +11,15 @@ int main() {
 	json j = convertPcapFileToJson("/home/kali/dev/Revolve/PCAP/2024-09-03-13-13-09.pcap");
 	//std::cout << j.dump(4) << std::endl;
 
-	InfluxdbClient client("localhost", "8086", "30ffd1384cc64fb7", "MyInitialAdminToken0==");
-	client.writeJsonToInfluxdb(j, 5000);
+	//InfluxdbClient client("localhost", "8086", "30ffd1384cc64fb7", "MyInitialAdminToken0==");
+	//client.writeJsonToInfluxdb(j, 5000);
 
 	WebSocketServer server("hotspot_name", "hotspot_password", 8080);
-	server.broadcastData(j.dump());
+	server.start();
+	while (true) {
+		server.broadcastData(j.dump(), 100);
+	}
+
 	return 0;
 }
 

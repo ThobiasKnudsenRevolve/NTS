@@ -19,7 +19,6 @@ ifeq ($(OS),Linux)
     LDFLAGS :=
     OBJ_DIR := ./obj
     BIN_DIR := ./bin
-    BIN_NAME := main
     SRC_DIRS := ./src
     SRC_FILES :=
     PATH_SEPARATOR := /
@@ -32,7 +31,7 @@ ifeq ($(OS),Linux)
 
     # Libraries and paths
     LIB_PATHS := -L/usr/local/lib
-    LIBS := -lglfw -lGLEW -lGL -lPcap++ -lPacket++ -lCommon++ -lpcap -lboost_system -lboost_thread -lpthread #-lwebsocketpp
+    LIBS := -lglfw -lGLEW -lGL -lPcap++ -lPacket++ -lCommon++ -lpcap -lboost_system -lboost_thread -lpthread
 
     # Additional flags
     CFLAGS_COMMON += -DNUNAVUT_ASSERT\(x\)=assert\(x\)
@@ -55,7 +54,6 @@ else ifeq ($(OS),Windows)
     LDFLAGS :=
     OBJ_DIR := .\obj
     BIN_DIR := .\bin
-    BIN_NAME := main
     SRC_DIRS := .\src
     SRC_FILES :=
     PATH_SEPARATOR := \
@@ -87,39 +85,42 @@ else
     $(error Unsupported OS)
 endif
 
+# List of main programs (source files with main())
+MAINS := main.cpp client.cpp
+# Derive binary names by removing the .cpp extension
+BIN_NAMES := $(patsubst %.cpp,%,$(MAINS))
+
 # Set VPATH to the directories containing source files
-# Include SRC_DIRS and directories of SRC_FILES
 VPATH := $(SRC_DIRS) $(sort $(dir $(SRC_FILES)))
 
-# Collect source files from specified directories (non-recursive)
+# Collect C and C++ source files (excluding mains)
 SRCS_C := $(foreach dir,$(SRC_DIRS),$(wildcard $(dir)/*.c))
-SRCS_CPP := $(foreach dir,$(SRC_DIRS),$(wildcard $(dir)/*.cpp))
-SRCS := $(SRCS_C) $(SRCS_CPP) $(SRC_FILES)
+ALL_SRCS_CPP := $(foreach dir,$(SRC_DIRS),$(wildcard $(dir)/*.cpp))
+NON_MAIN_SRCS_CPP := $(filter-out $(MAINS),$(ALL_SRCS_CPP))
+SRCS := $(SRCS_C) $(NON_MAIN_SRCS_CPP) $(SRC_FILES)
 
-# Object files mapping: obj/filename.o
-# Ensure that each object file is named after its source file without directory paths
+# Object files for non-main sources
 OBJS := $(patsubst %.c, $(OBJ_DIR)/%.o, $(notdir $(SRCS_C)))
-OBJS += $(patsubst %.cpp, $(OBJ_DIR)/%.o, $(notdir $(SRCS_CPP)))
-OBJS += $(patsubst %.cpp, $(OBJ_DIR)/%.o, $(notdir $(notdir $(SRC_FILES))))
+OBJS += $(patsubst %.cpp, $(OBJ_DIR)/%.o, $(notdir $(NON_MAIN_SRCS_CPP)))
+OBJS += $(patsubst %.cpp, $(OBJ_DIR)/%.o, $(notdir $(SRC_FILES)))
+
+# Object files for main sources
+MAIN_OBJS := $(patsubst %.cpp, $(OBJ_DIR)/%.o, $(notdir $(MAINS)))
 
 # Combine flags
 CFLAGS := $(CFLAGS_COMMON) $(CFLAGS_C) $(INCLUDE_PATHS)
 CPPFLAGS := $(CFLAGS_COMMON) $(CFLAGS_CPP) $(INCLUDE_PATHS)
 LDFLAGS += $(LIB_PATHS) $(LIBS)
 
-# Default target
+# Default target: build all binaries
 .PHONY: all
-all: prepare_dirs compile
+all: prepare_dirs $(BIN_NAMES:%=$(BIN_DIR)/%)
 
 # Prepare necessary directories
 .PHONY: prepare_dirs
 prepare_dirs:
 	@mkdir -p $(OBJ_DIR)
 	@mkdir -p $(BIN_DIR)
-
-# Compile source files
-.PHONY: compile
-compile: $(BIN_DIR)/$(BIN_NAME)
 
 # Pattern rules to compile source files into object files
 $(OBJ_DIR)/%.o: %.c
@@ -130,14 +131,18 @@ $(OBJ_DIR)/%.o: %.cpp
 	@mkdir -p $(dir $@)
 	$(CPP_COMPILER) $(CPPFLAGS) -MMD -MF $@.d -c $< -o $@
 
-# Link object files into the final executable
-$(BIN_DIR)/$(BIN_NAME): $(OBJS)
+# Specific linking rules for each binary
+$(BIN_DIR)/main: $(OBJ_DIR)/main.o $(filter-out $(OBJ_DIR)/client.o, $(OBJS))
+	$(CPP_COMPILER) $^ $(LDFLAGS) -o $@
+
+$(BIN_DIR)/client: $(OBJ_DIR)/client.o $(filter-out $(OBJ_DIR)/main.o, $(OBJS))
 	$(CPP_COMPILER) $^ $(LDFLAGS) -o $@
 
 # Clean up build artifacts
 .PHONY: clean
 clean:
-	@rm -rf $(OBJ_DIR) $(BIN_DIR)/$(BIN_NAME)
+	@rm -rf $(OBJ_DIR) $(foreach bin,$(BIN_NAMES),$(BIN_DIR)/$(bin))
 
 # Include dependency files
 -include $(OBJS:.o=.d)
+-include $(MAIN_OBJS:.o=.d)
