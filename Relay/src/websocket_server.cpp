@@ -20,6 +20,7 @@ WebSocketServer::WebSocketServer(const std::string& ssid,
 {
     // Instantiate the appropriate HotspotManager based on the platform
     m_hotspot_manager = HotspotManager::createInstance();
+    start();
 }
 
 WebSocketServer::~WebSocketServer() {
@@ -122,32 +123,92 @@ void WebSocketServer::stop() {
     std::cout << "WebSocket server stopped.\n";
 }
 
-void WebSocketServer::broadcastData(const std::string& data, size_t batch_size) {
-    std::lock_guard<std::mutex> lock(m_clients_mutex);
-    auto it = m_clients.begin();
-    
-    while (it != m_clients.end()) {
-        size_t count = 0;
-        auto end_of_batch = it;
-        
-        // Send to batch_size clients or until the end of the list
-        while (end_of_batch != m_clients.end() && count < batch_size) {
-            try {
-                (*end_of_batch)->write(asio::buffer(data));
-                ++count;
-                ++end_of_batch;
-            } catch (const std::exception& e) {
-                std::cerr << "Client disconnected during batch broadcast: " << e.what() << "\n";
-                end_of_batch = m_clients.erase(end_of_batch); // Remove the disconnected client
-            }
+bool WebSocketServer::broadcastJson(const json& j, const size_t bytes_per_second, const size_t time_ms_between_sends) {
+
+    // Check if JSON contains "messages" array
+    if (!j.contains("messages") || !j["messages"].is_array()) {
+        std::cerr << "JSON does not contain a 'messages' array.\n";
+        return false;
+    }
+
+    const auto& messages = j["messages"];
+    size_t total_bytes_sent = 0;
+    auto start_time = std::chrono::steady_clock::now();
+    size_t prev_time_sent_ms = 0;
+    size_t hit_data_size_zero_count = 0;
+
+    // going through all messages
+    for (unsigned int i = 0; i < messages.size(); /*empty*/ ) {
+
+        //std::cout << i << std::endl;
+
+        // 10 seconds of data size being zero causes to break loop
+        if (hit_data_size_zero_count > 10000) {
+            std::cout << "data size has been 0 for 10000 iterations. you have to adjust bytes_per_second and time_ms_between_sends\n";
+            return false;
         }
 
-        // Move the main iterator to where we left off
-        it = end_of_batch;
+        // if total bytes sent exceeds 10GB then the json data is to large and it must be messaged
+        if (total_bytes_sent > 10000000) {
+            std::cerr << "json data is to large. j.dump().size() is greater than 10GB\n";
+            return false;
+        }
 
-        // Optionally sleep or yield here to prevent blocking
-        // std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        if (m_clients.empty()) {
+            std::cout << "no clients\n";
+            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        }
+
+        // figure out how long to wait
+        size_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start_time).count();
+        long long waiting_ms = (long long)prev_time_sent_ms + (long long)time_ms_between_sends - (long long)now_ms;
+        if (waiting_ms > 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(waiting_ms)); // waiting until next batch should be sent
+            now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start_time).count();
+        }
+
+        // get all messages within current byte limit
+        std::string data = "";
+        while (total_bytes_sent + data.size() < now_ms*bytes_per_second/1000) {
+            if (i == messages.size()) {
+                break; // there are no more messages
+            }
+            data += messages[i].dump();
+            ++i;
+        }
+
+        // checks if there is data
+        if (data.size() == 0) {
+            ++hit_data_size_zero_count;
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            continue;
+        } else {
+            hit_data_size_zero_count = 0;
+        }
+
+        // sending data to all clients
+        {
+            std::lock_guard<std::mutex> lock(m_clients_mutex);
+            for (auto it = m_clients.begin(); it != m_clients.end(); ++it ) {
+                try {
+                    (*it)->write(asio::buffer(data));
+                } catch (const std::exception& e) {
+                    std::cerr << "Client disconnected during broadcast: " << e.what() << "\n";
+                    it = m_clients.erase(it);
+                    if (m_clients.empty()) {
+                        return false; // No clients left to broadcast to
+                    }
+                }
+            }
+        }
+        total_bytes_sent += data.size();
+
+        // setting previous time data was sent
+        prev_time_sent_ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start_time).count();
+
     }
+    std::cout << "successfully sent all messages. " << total_bytes_sent << " was sent and it took " << prev_time_sent_ms << " milliseconds\n";
+    return true;
 }
 
 void WebSocketServer::enqueueIncomingData(const std::string& data) {

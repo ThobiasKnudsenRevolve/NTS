@@ -15,9 +15,13 @@ int main() {
 	//client.writeJsonToInfluxdb(j, 5000);
 
 	WebSocketServer server("hotspot_name", "hotspot_password", 8080);
-	server.start();
 	while (true) {
-		server.broadcastData(j.dump(), 100);
+		if (!server.broadcastJson(j, 1000, 100)) {
+			server.stop();
+			break;
+		}
+		std::cout << "uhh\n";
+		sleep(1);
 	}
 
 	return 0;
