@@ -17,5 +17,8 @@ public:
     virtual void stopHotspot() = 0;
 
     // Factory method to create the appropriate HotspotManager instance
-    static std::unique_ptr<HotspotManager> createInstance();
+    static std::unique_ptr<HotspotManager>  createInstance();
+
+    bool m_hotspot_running = false;
+    std::string m_hotspot_connection_name;
 };

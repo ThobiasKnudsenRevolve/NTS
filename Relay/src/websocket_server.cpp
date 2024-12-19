@@ -8,55 +8,80 @@
 #include <iomanip>
 #include <cstdlib>
 #include <csignal>
+#include <string>
+#include <vector>
+#include <memory>
+#include <mutex>
+#include <thread>
+#include <atomic>
+#include <functional>
+#include <signal.h>
+#include <queue>
+#include <condition_variable>
 
-WebSocketServer::WebSocketServer(const std::string& ssid,
-                                 const std::string& password,
-                                 unsigned short port)
-    : m_ssid(ssid),
-      m_password(password),
-      m_port(port),
-      m_acceptor(m_io_context, tcp::endpoint(tcp::v4(), port)),
-      m_running(false)
-{
-    // Instantiate the appropriate HotspotManager based on the platform
-    m_hotspot_manager = HotspotManager::createInstance();
-    start();
+#include <boost/asio.hpp>
+#include <boost/beast.hpp>
+#include <nlohmann/json.hpp>
+using json = nlohmann::json;
+
+WebSocketServer* WebSocketServer::g_server = nullptr;
+
+WebSocketServer::WebSocketServer() : m_running(false) {
+    if (g_server != nullptr) {
+        throw std::runtime_error("you cannot create multiple servers.");
+    }
+    WebSocketServer::g_server = this;
+    std::signal(SIGINT, WebSocketServer::signalHandler);
+    std::signal(SIGTERM, WebSocketServer::signalHandler);
 }
 
 WebSocketServer::~WebSocketServer() {
-    stop();
+    stopServer();
+    stopHotspot(); // if hotspot is not running this will still work as it should
 }
 
-void WebSocketServer::start() {
+void WebSocketServer::startServer(unsigned short port) {
     if (m_running.load()) {
         std::cerr << "Server is already running.\n";
         return;
     }
 
-    m_running = true;
+    m_port = port;
+    m_acceptor = std::make_unique<tcp::acceptor>(m_io_context);
+    boost::system::error_code ec;
 
-    // Create hotspot
-    try {
-        m_hotspot_manager->createHotspot(m_ssid, m_password);
-    } catch (const std::exception& e) {
-        std::cerr << "Failed to create hotspot: " << e.what() << "\n";
-        stop();
+    m_acceptor->open(tcp::v4(), ec);
+    if (ec) {
+        std::cerr << "Failed to open acceptor: " << ec.message() << "\n";
         return;
     }
 
-    // Register signal handlers for graceful shutdown
-    // Note: Proper signal handling requires access to the server instance.
-    // One approach is to store a static instance pointer or use a global variable.
-    std::signal(SIGINT, [](int signal) {
-        // Placeholder: If you had a global server instance, you'd call server->stop() here.
-    });
+    m_acceptor->set_option(asio::socket_base::reuse_address(true), ec);
+    if (ec) {
+        std::cerr << "Failed to set reuse_address: " << ec.message() << "\n";
+        return;
+    }
+
+    m_acceptor->bind(tcp::endpoint(tcp::v4(), m_port), ec);
+    if (ec) {
+        std::cerr << "Failed to bind: " << ec.message() << "\n";
+        return;
+    }
+
+    m_acceptor->listen(asio::socket_base::max_listen_connections, ec);
+    if (ec) {
+        std::cerr << "Failed to listen: " << ec.message() << "\n";
+        return;
+    }
+
+    m_running = true;
 
     // Start accepting clients
     std::thread([this]() {
         try {
             while (m_running.load()) {
                 auto socket = std::make_shared<tcp::socket>(m_io_context);
-                m_acceptor.accept(*socket);
+                m_acceptor->accept(*socket);
                 auto ws = std::make_shared<websocket::stream<tcp::socket>>(std::move(*socket));
                 ws->accept();
 
@@ -65,7 +90,6 @@ void WebSocketServer::start() {
                     m_clients.push_back(ws);
                 }
 
-                // Handle client in a separate thread
                 std::thread(&WebSocketServer::handleClient, this, ws).detach();
             }
         } catch (const std::exception& e) {
@@ -87,12 +111,14 @@ void WebSocketServer::start() {
     std::cout << "WebSocket server started on port " << m_port << ".\n";
 }
 
-void WebSocketServer::stop() {
+void WebSocketServer::stopServer() {
     if (!m_running.load()) {
         return;
     }
 
     m_running = false;
+
+    stopHotspot();
 
     // Close all client connections
     {
@@ -113,17 +139,44 @@ void WebSocketServer::stop() {
         m_io_thread.join();
     }
 
-    // Stop hotspot
-    try {
-        m_hotspot_manager->stopHotspot();
-    } catch (const std::exception& e) {
-        std::cerr << "Failed to stop hotspot: " << e.what() << "\n";
-    }
+    m_acceptor.reset();
 
     std::cout << "WebSocket server stopped.\n";
 }
 
+void WebSocketServer::startHotspot(const std::string& ssid, const std::string& password) {
+    m_ssid = ssid;
+    m_password = password;
+
+    // Instantiate hotspot manager here
+    if (!m_hotspot_manager) {
+        m_hotspot_manager = HotspotManager::createInstance();
+    }
+
+    try {
+        m_hotspot_manager->createHotspot(m_ssid, m_password);
+    } catch (const std::exception& e) {
+        std::cerr << "Failed to create hotspot: " << e.what() << "\n";
+        return;
+    }
+}
+
+void WebSocketServer::stopHotspot() {
+    try {
+        if (m_hotspot_manager) {
+            if (m_hotspot_manager->m_hotspot_running) {
+                m_hotspot_manager->stopHotspot();
+            } else {
+                std::cerr << "Hotspot is not active, nothing to stop.\n";
+            }
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "Failed to stop hotspot: " << e.what() << "\n";
+    }
+}
+
 bool WebSocketServer::broadcastJson(const json& j, const size_t bytes_per_second, const size_t time_ms_between_sends) {
+    if (!m_running.load()) return false;
 
     // Check if JSON contains "messages" array
     if (!j.contains("messages") || !j["messages"].is_array()) {
@@ -137,20 +190,21 @@ bool WebSocketServer::broadcastJson(const json& j, const size_t bytes_per_second
     size_t prev_time_sent_ms = 0;
     size_t hit_data_size_zero_count = 0;
 
-    // going through all messages
-    for (unsigned int i = 0; i < messages.size(); /*empty*/ ) {
+    for (unsigned int i = 0; i < messages.size(); /*empty*/) {
 
-        //std::cout << i << std::endl;
+        // if the server is signaled to close this is necessary to escape this function
+        if (!m_running.load()) {
+            std::cout << "Server stopping, broadcast interrupted.\n";
+            return false;
+        }
 
-        // 10 seconds of data size being zero causes to break loop
         if (hit_data_size_zero_count > 10000) {
             std::cout << "data size has been 0 for 10000 iterations. you have to adjust bytes_per_second and time_ms_between_sends\n";
             return false;
         }
 
-        // if total bytes sent exceeds 10GB then the json data is to large and it must be messaged
         if (total_bytes_sent > 10000000) {
-            std::cerr << "json data is to large. j.dump().size() is greater than 10GB\n";
+            std::cerr << "json data is too large.\n";
             return false;
         }
 
@@ -159,25 +213,22 @@ bool WebSocketServer::broadcastJson(const json& j, const size_t bytes_per_second
             std::this_thread::sleep_for(std::chrono::milliseconds(1000));
         }
 
-        // figure out how long to wait
         size_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start_time).count();
         long long waiting_ms = (long long)prev_time_sent_ms + (long long)time_ms_between_sends - (long long)now_ms;
         if (waiting_ms > 0) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(waiting_ms)); // waiting until next batch should be sent
+            std::this_thread::sleep_for(std::chrono::milliseconds(waiting_ms)); 
             now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start_time).count();
         }
 
-        // get all messages within current byte limit
         std::string data = "";
-        while (total_bytes_sent + data.size() < now_ms*bytes_per_second/1000) {
+        while (total_bytes_sent + data.size() < now_ms * bytes_per_second / 1000) {
             if (i == messages.size()) {
-                break; // there are no more messages
+                break; // no more messages
             }
             data += messages[i].dump();
             ++i;
         }
 
-        // checks if there is data
         if (data.size() == 0) {
             ++hit_data_size_zero_count;
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -186,28 +237,28 @@ bool WebSocketServer::broadcastJson(const json& j, const size_t bytes_per_second
             hit_data_size_zero_count = 0;
         }
 
-        // sending data to all clients
+        std::cout << data << std::endl << std::endl;;
+
         {
             std::lock_guard<std::mutex> lock(m_clients_mutex);
-            for (auto it = m_clients.begin(); it != m_clients.end(); ++it ) {
+            for (auto it = m_clients.begin(); it != m_clients.end();) {
                 try {
                     (*it)->write(asio::buffer(data));
+                    ++it;
                 } catch (const std::exception& e) {
                     std::cerr << "Client disconnected during broadcast: " << e.what() << "\n";
                     it = m_clients.erase(it);
                     if (m_clients.empty()) {
-                        return false; // No clients left to broadcast to
+                        return false;
                     }
                 }
             }
         }
         total_bytes_sent += data.size();
 
-        // setting previous time data was sent
         prev_time_sent_ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start_time).count();
-
     }
-    std::cout << "successfully sent all messages. " << total_bytes_sent << " was sent and it took " << prev_time_sent_ms << " milliseconds\n";
+    std::cout << "Successfully sent all messages. " << total_bytes_sent << " bytes sent in " << prev_time_sent_ms << " milliseconds\n";
     return true;
 }
 
@@ -229,19 +280,20 @@ std::string WebSocketServer::dequeueIncomingData() {
     return front_data;
 }
 
+bool WebSocketServer::isRunning() {
+    return m_running.load();
+}
 void WebSocketServer::handleClient(std::shared_ptr<websocket::stream<tcp::socket>> ws) {
     try {
         while (m_running.load()) {
             boost::beast::flat_buffer buffer;
             ws->read(buffer);
+            if (!m_running.load()) break;  // Check if still running before processing
+
             std::string received = boost::beast::buffers_to_string(buffer.data());
             std::cout << "Received from client: " << received << "\n";
 
-            // Enqueue the incoming data for processing elsewhere
             enqueueIncomingData(received);
-
-            // Optionally, echo the received message back
-            // ws->write(asio::buffer("Echo: " + received));
         }
     } catch (const std::exception& e) {
         std::cerr << "Client connection error: " << e.what() << "\n";
@@ -250,10 +302,9 @@ void WebSocketServer::handleClient(std::shared_ptr<websocket::stream<tcp::socket
     }
 }
 
-void WebSocketServer::signalHandler(int signal, WebSocketServer* server) {
-    if (signal == SIGINT || signal == SIGTERM) {
-        if (server) {
-            server->stop();
-        }
+void WebSocketServer::signalHandler(int signal) {
+    if (g_server) {
+        g_server->stopServer();
+        g_server = nullptr;
     }
 }

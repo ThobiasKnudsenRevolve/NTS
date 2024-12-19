@@ -1,89 +1,36 @@
-# Detect the operating system
-UNAME_S := $(shell uname -s)
 
-ifeq ($(UNAME_S),Linux)
-    OS := Linux
-else ifeq ($(OS),Windows_NT)
-    OS := Windows
-else
-    OS := Unknown
-endif
+C_COMPILER := gcc
+CPP_COMPILER := g++
+CFLAGS_COMMON := -Wall
+CFLAGS_C :=
+CFLAGS_CPP := -std=c++17
+LDFLAGS :=
+OBJ_DIR := ./obj
+BIN_DIR := ./bin
+SRC_DIRS := ./src
+SRC_FILES :=
+PATH_SEPARATOR := /
 
-# Default configurations
-ifeq ($(OS),Linux)
-    C_COMPILER := gcc
-    CPP_COMPILER := g++
-    CFLAGS_COMMON := -Wall
-    CFLAGS_C :=
-    CFLAGS_CPP := -std=c++17
-    LDFLAGS :=
-    OBJ_DIR := ./obj
-    BIN_DIR := ./bin
-    SRC_DIRS := ./src
-    SRC_FILES :=
-    PATH_SEPARATOR := /
+# Additional Linux-specific settings
+INSTALL_CMD := sudo apt-get install -y
 
-    # Additional Linux-specific settings
-    INSTALL_CMD := sudo apt-get install -y
+# Include paths
+INCLUDE_PATHS := -I./include
 
-    # Include paths
-    INCLUDE_PATHS := -I./include
+# Libraries and paths
+LIB_PATHS := -L/usr/local/lib
+LIBS := -lglfw -lGLEW -lGL -lPcap++ -lPacket++ -lCommon++ -lpcap -lboost_system -lboost_thread -lpthread
 
-    # Libraries and paths
-    LIB_PATHS := -L/usr/local/lib
-    LIBS := -lglfw -lGLEW -lGL -lPcap++ -lPacket++ -lCommon++ -lpcap -lboost_system -lboost_thread -lpthread
+# Additional flags
+CFLAGS_COMMON += -DNUNAVUT_ASSERT\(x\)=assert\(x\)
 
-    # Additional flags
-    CFLAGS_COMMON += -DNUNAVUT_ASSERT\(x\)=assert\(x\)
+SRC_DIRS += ./external/libcanard/libcanard
+SRC_DIRS += ./external/dsdl/compiled
 
-    SRC_DIRS += ./external/libcanard/libcanard
-    SRC_DIRS += ./external/dsdl/compiled
-
-    # Include paths
-    INCLUDE_PATHS += -I./external/libcanard
-    INCLUDE_PATHS += -I./external/dsdl/compiled
-    INCLUDE_PATHS += -I./external/json/include
-
-else ifeq ($(OS),Windows)
-    # Assume Windows settings
-    C_COMPILER := gcc
-    CPP_COMPILER := g++
-    CFLAGS_COMMON := -Wall
-    CFLAGS_C :=
-    CFLAGS_CPP := -std=c++17
-    LDFLAGS :=
-    OBJ_DIR := .\obj
-    BIN_DIR := .\bin
-    SRC_DIRS := .\src
-    SRC_FILES :=
-    PATH_SEPARATOR := \
-
-    # Additional Windows-specific settings
-    INSTALL_CMD := choco install -y
-
-    # Paths to external libraries (adjust these paths based on your directory structure)
-    EXTERNAL_DIR := $(CURDIR)\external
-
-    # Include paths
-    INCLUDE_PATHS := -I$(EXTERNAL_DIR)\include
-
-    # JSON library
-    INCLUDE_PATHS += -I$(EXTERNAL_DIR)\json\include
-
-    # WebSocket++ and Boost libraries (installed via vcpkg)
-    INCLUDE_PATHS += -I$(EXTERNAL_DIR)\vcpkg\installed\x64-windows-static\include
-    LIB_PATHS += -L$(EXTERNAL_DIR)\vcpkg\installed\x64-windows-static\lib
-    LIBS += -lboost_system-vc143-mt-x64-1_86
-    LIBS += -lboost_context-vc143-mt-x64-1_86
-    LIBS += -lboost_coroutine-vc143-mt-x64-1_86
-    LIBS += -lboost_thread-vc143-mt-x64-1_86
-    LIBS += -lws2_32
-
-    # Error out since Windows support is not fully implemented
-    $(error Windows support is not fully implemented in this Makefile)
-else
-    $(error Unsupported OS)
-endif
+# Include paths
+INCLUDE_PATHS += -I./external/libcanard
+INCLUDE_PATHS += -I./external/dsdl/compiled
+INCLUDE_PATHS += -I./external/json/include
 
 # List of main programs (source files with main())
 MAINS := main.cpp client.cpp
