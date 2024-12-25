@@ -8,8 +8,8 @@ using json = nlohmann::json;
 
 int main() {
     printf("Relay\n");
-    json j = convertPcapFileToJson("/home/kali/dev/Revolve/PCAP/2024-09-03-13-13-09.pcap");
-    //std::cout << j.dump(4) << std::endl;
+    json j = convertPcapFileToJson("2024-09-03-13-13-09.pcap");
+    std::cout << j.dump(4) << std::endl;
 
 	//InfluxdbClient client("localhost", "8086", "30ffd1384cc64fb7", "MyInitialAdminToken0==");
 	//client.writeJsonToInfluxdb(j, 5000);
