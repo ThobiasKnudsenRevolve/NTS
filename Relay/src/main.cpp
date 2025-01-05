@@ -1,15 +1,28 @@
 #include "influxdb_client.hpp"
 #include "websocket_server.hpp"
-#include "pcap_reader.hpp"
+#include "converter.hpp"
 #include <iostream>
+#include <vector>
 #include <time.h>
 #include <nlohmann/json.hpp>
 using json = nlohmann::json;
 
+// for later:
+// 		look at how subscriptons are handled
+//      you have to think about managing transfer_id 
+// 		
+
 int main() {
-    printf("Relay\n");
-    json j = convertPcapFileToJson("2024-09-03-13-13-09.pcap");
-    std::cout << j.dump(4) << std::endl;
+
+	Converter c;
+    json j = c.pcapFileToJson("2024-09-03-13-13-09.pcap");
+    //std::cout << j.dump(4) << std::endl;
+    sleep(2);
+    std::vector<uint8_t> udp_msg = c.jsonToUdp(j);
+    std::cout << udp_msg.size() << std::endl;
+    sleep(2);
+    json i = c.udpToJson(&udp_msg[0], udp_msg.size());
+    std::cout << i.dump(4) << std::endl;
 
 	//InfluxdbClient client("localhost", "8086", "30ffd1384cc64fb7", "MyInitialAdminToken0==");
 	//client.writeJsonToInfluxdb(j, 5000);

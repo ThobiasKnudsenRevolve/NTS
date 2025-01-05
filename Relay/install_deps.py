@@ -24,7 +24,7 @@ def cmd(*args, **kwargs) -> bool:
             print(Fore.RED + "ERROR  " + Fore.WHITE + f"{result}\n")
             return False
     except FileNotFoundError:
-        print(Fore.RED + f"ERRORR: FileNotFoundError occurred  " + Fore.WHITE + f"Command '{command_str}' not found\n")
+        print(Fore.RED + "ERROR: FileNotFoundError occurred  " + Fore.WHITE + f"Command '{command_str}' not found\n")
         return False
     except subprocess.CalledProcessError as e:
         print(Fore.RED + "ERROR: CalledProcessError occurred   " + Fore.WHITE + f"Details: {e}\n")
@@ -38,7 +38,6 @@ def git():
         if not cmd(f"git --version"):
             print("could not install git")
             sys.exit()
-
 def gpp():
     if not cmd("g++ --version", shell=True):
         cmd("sudo apt-get update", shell=True)
